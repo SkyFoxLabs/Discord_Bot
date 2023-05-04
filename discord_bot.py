@@ -10,17 +10,18 @@ import os
 import discord
 import openai
 from dotenv import load_dotenv
+from discord_slash import SlashCommand, SlashContext
 
 # Load environment variables from .env file
 load_dotenv()
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
-# Initialize Discord client
+# Initialize Discord client and slash commands
 intents = discord.Intents.default()
 intents.members = True
 client = discord.Client(intents=intents)
-#https://discord.com/api/oauth2/authorize?client_id=1100429021944225902&permissions=345744992320&scope=bot
+slash = SlashCommand(client, sync_commands=True)
 
 # Initialize OpenAI API
 openai.api_key = OPENAI_API_KEY
@@ -38,19 +39,14 @@ def generate_response(input_text):
     )
     return response.choices[0].text.strip()
 
-# Define function to handle messages sent to the Discord server
-@client.event
-async def on_message(message):
-    # Ignore messages sent by the bot itself
-    if message.author == client.user:
-        return
-
+# Define slash command to trigger the chatbot response
+@slash.slash(name="chat", description="Get a response from the chatbot", guild_ids=[YOUR_SERVER_ID])
+async def chat(ctx: SlashContext, message: str):
     # Generate response using ChatGPT3.5
-    input_text = message.content
-    response = generate_response(input_text)
+    response = generate_response(message)
 
     # Send response back to Discord server
-    await message.channel.send(response)
+    await ctx.send(response)
 
 # Run the Discord client
 client.run(DISCORD_TOKEN)
