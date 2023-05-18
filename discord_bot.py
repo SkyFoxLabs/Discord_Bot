@@ -8,93 +8,79 @@ Created on Mon May  1 18:57:47 2023
 
 import discord
 import openai
-import asyncio
-from datetime import datetime, timedelta
 from dotenv import load_dotenv
+import asyncio
 import os
 
 # Load environment variables from .env file
 load_dotenv()
 
-# Get Discord token from environment variable
-discord_token = os.getenv('DISCORD_TOKEN')
+# Get the OpenAI API key from the environment variables
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Set OpenAI API key from environment variable
-openai.api_key = os.getenv('OPENAI_API_KEY')
+# Set up OpenAI with the API key
+openai.api_key = OPENAI_API_KEY
 
 intents = discord.Intents.default()
 intents.message_content = True
 
 client = discord.Client(intents=intents)
-
-# Dictionary to store conversation history and last active time for each user
-conversation_history = {}
-last_active_time = {}
-
-# Inactive time limit (5 minutes)
-inactive_time_limit = timedelta(minutes=5)
+chat_sessions = {}
 
 @client.event
 async def on_ready():
     print('Bot is ready and connected to Discord.')
-
 
 @client.event
 async def on_message(message):
     if message.author == client.user:
         return
 
-    user_id = message.author.id
+    # Check if the bot is mentioned
+    if client.user.mentioned_in(message):
+        # Split the message content into individual words
+        words = message.content.lower().split()
 
-    if message.content.lower() == 'quit':
-        if user_id in conversation_history:
-            # Remove the conversation history and last active time for the user
-            del conversation_history[user_id]
-            del last_active_time[user_id]
-        await message.channel.send("Chat session ended. You can start a new session anytime.")
-        return
+        # Check if the bot's mention is at the beginning of the message
+        if words[0] == f'<@!{client.user.id}>' or words[0] == f'<@{client.user.id}>':
+            if message.author.id not in chat_sessions:
+                chat_sessions[message.author.id] = [f"User: {message.content}"]
+                await message.channel.send("Chat session started. Type 'quit' to end the session.")
 
-    if user_id in conversation_history:
-        # Update the last active time for the user
-        last_active_time[user_id] = datetime.now()
+    if message.author.id in chat_sessions:
+        context = chat_sessions[message.author.id]
 
-        # Append the new message to the existing conversation history
-        conversation_history[user_id].append(message.content)
-    else:
-        # Start a new conversation history and set the last active time for the user
-        conversation_history[user_id] = [message.content]
-        last_active_time[user_id] = datetime.now()
-
-    # Concatenate the conversation history for the user with newline separator
-    conversation = "\n".join(conversation_history[user_id])
-
-    # Generate response using conversation history
-    response = openai.Completion.create(
-        engine='text-davinci-003',
-        prompt=conversation,
-        max_tokens=100
-    )
-
-    bot_response = response.choices[0].text.strip()
-    await message.channel.send(bot_response)
-
-    # Check inactive time limit
-    if (datetime.now() - last_active_time[user_id]) >= inactive_time_limit:
-        await message.channel.send("It seems you have been inactive. If you want to continue, please type a message.")
+        context.append(f"User: {message.content}")
+        context.append(f"Bot: {context[-2]}")
 
         try:
-            # Wait for the user's response for a maximum of 2 minutes
-            continue_message = await client.wait_for('message', timeout=120, check=lambda m: m.author.id == user_id)
-        except asyncio.TimeoutError:
-            # If no response from the user, end the session and delete conversation context
-            del conversation_history[user_id]
-            del last_active_time[user_id]
-            await message.channel.send("Chat session ended due to inactivity.")
+            response = await asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda: openai.Completion.create(
+                    engine='text-davinci-003',
+                    prompt='\n'.join(context),
+                    max_tokens=100,
+                    timeout=120,
+                    n=1,
+                    stop=None,
+                    temperature=0.7
+                )
+            )
+        except openai.error.RateLimitError:
+            await message.channel.send("Oops! The bot is currently experiencing a high volume of requests. Please try again later.")
             return
-        
-        # Update the conversation history and last active time with the user's response
-        conversation_history[user_id].append(continue_message.content)
-        last_active_time[user_id] = datetime.now()
 
+        reply = response.choices[0].text.strip()
 
-client.run(discord_token)
+        if reply:
+            context.append(f"Bot: {reply}")
+            await message.channel.send(reply)
+    #    else:
+    #        await message.channel.send("Oops! The bot encountered an issue and couldn't generate a valid response.")
+
+        # Check if the user wants to end the session
+        if message.content.lower() == 'quit':
+            chat_sessions.pop(message.author.id, None)
+            await message.channel.send("Chat session ended. You can start a new session anytime.")
+
+client.run(os.getenv("DISCORD_TOKEN"))
